@@ -162,6 +162,9 @@ class Abul extends EventEmitter {
 
     // 保存到当前进程的任务记录
     this.runningTask[newTaskName] = queue;
+
+    // 保存到正在运行的任务记录中
+    await this.runningDb.setRunning(newTaskName);
   }
 
   /**
