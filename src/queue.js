@@ -5,9 +5,9 @@ import {EventEmitter} from 'events';
 import Promise from 'bluebird';
 import Queue from 'bull';
 
-const debug = Debug('QUEUE');
+const debug = Debug('abul');
 
-class Manager extends EventEmitter {
+class Abul extends EventEmitter {
   constructor(opts) {
     super();
 
@@ -39,8 +39,8 @@ class Manager extends EventEmitter {
     this.runningTask = {};
 
     // 定时加载正在运行的任务
-    Manager.runningTick(this);
-    setInterval(Manager.runningTick(this), 5000);
+    Abul.runningTick(this);
+    setInterval(Abul.runningTick(this), 5000);
   }
 
   /**
@@ -196,4 +196,4 @@ class Manager extends EventEmitter {
   }
 }
 
-export default Manager;
+export default Abul;
