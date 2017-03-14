@@ -1,17 +1,17 @@
 {
   "name": "abull",
   "version": "1.0.0",
-  "main": "dist/queue.js",
+  "main": "lib/queue.js",
   "scripts": {
-    "clean": "rm -rf .nyc_output coverage dist",
-    "build": "npm run clean && babel lib -d dist",
+    "clean": "rm -rf .nyc_output coverage lib",
+    "build": "npm run clean && babel src -d lib",
     "test": "node_modules/.bin/nyc node_modules/.bin/ava -v test",
     "test-cov": "npm run test && npm run analyze-coverage && npm run check-coverage",
     "analyze-coverage": "node_modules/.bin/nyc report --reporter=html",
     "check-coverage": "node_modules/.bin/nyc check-coverage --lines 90 --functions 90 --branches 90",
     "test-travis": "npm run test && node_modules/.bin/nyc report --reporter=text-lcov > coverage/lcov.info && npm run check-coverage",
     "lint": "node_modules/.bin/eslint .",
-    "example": "npm run build && DEBUG=kue-ex* node --harmony example/app.js",
+    "example": "npm run build && DEBUG=abull example/example.js",
     "prepublish": "npm run build"
   },
   "keywords": [],
