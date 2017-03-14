@@ -1,0 +1,7 @@
+.idea
+.DS_Store
+.nyc_output
+.vscode
+coverage
+test
+example

@@ -1,0 +1,40 @@
+{
+  "extends": "airbnb-base",
+  "rules": {
+    "arrow-body-style": [
+      "error",
+      "always"
+    ],
+    "guard-for-in": 0,
+    "import/no-dynamic-require": 1,
+    "import/no-mutable-exports": 1,
+    "import/prefer-default-export": 0,
+    "import/no-extraneous-dependencies": [
+      "error",
+      {
+        "devDependencies": [
+          "**/test/**"
+        ]
+      }
+    ],
+    "no-console": 0,
+    "no-empty-function": 0,
+    "no-param-reassign": [
+      2,
+      {
+        "props": false
+      }
+    ],
+    "no-restricted-syntax": 1,
+    "no-unused-vars": 1,
+    "no-underscore-dangle": [
+      "error",
+      {
+        "allow": [
+          "_id"
+        ]
+      }
+    ],
+    "object-curly-spacing": 0
+  }
+}
