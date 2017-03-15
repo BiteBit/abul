@@ -14,10 +14,11 @@ class Abul extends EventEmitter {
     // 参数校验
     assert.equal(typeof opts.handler, 'function');
     assert.equal(typeof opts.connectionString === 'string' || opts.connectionString === undefined, true);
-    assert.equal(typeof opts.concurrency === 'number' || opts.connectionString === undefined, true);
+    assert.equal(typeof opts.concurrency === 'number' || opts.concurrency === undefined, true);
     assert.equal(typeof opts.runningDb.findRunning, 'function');
     assert.equal(typeof opts.runningDb.createRunning, 'function');
     assert.equal(typeof opts.runningDb.removeRunning, 'function');
+    assert.equal(typeof opts.addExpire === 'number' || opts.addExpire === undefined, true);
 
     // 需要外部配置的参数
     // 队列处理器
@@ -35,6 +36,9 @@ class Abul extends EventEmitter {
     // removeRunning
     this.runningDb = opts.runningDb;
 
+    // 任务添加的过期时间
+    this.addExpire = opts.addExpire || 30 * 1000;
+
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // 内部数据结构，不是参数
     ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -48,9 +52,6 @@ class Abul extends EventEmitter {
     // key    taskname任务名称，key必须是唯一的
     // value  boolean
     this.runningTaskLastAdd = {};
-
-    // 任务添加的过期时间
-    this.runningTaskLastAddExpire = 60 * 1000;
 
     // 定时加载正在运行的任务
     Abul.runningTick(this);
@@ -149,7 +150,7 @@ class Abul extends EventEmitter {
     }
 
     // 过xx秒后再次检查，如果仍然通过，那么发出任务完成信号，或者检测错误可能是queue连接已经被断开、销毁
-    await Promise.delay(this.runningTaskLastAddExpire * 1.5)
+    await Promise.delay(this.addExpire * 1.5)
       .then(async () => {
         try {
           const newStatus = await queue.getJobCounts();
@@ -175,7 +176,7 @@ class Abul extends EventEmitter {
    * @private
    */
   isAddFinish(taskName) {
-    return Date.now() - this.runningTaskLastAdd[taskName] > this.runningTaskLastAddExpire;
+    return Date.now() - this.runningTaskLastAdd[taskName] > this.addExpire;
   }
 
   /**
@@ -237,6 +238,12 @@ class Abul extends EventEmitter {
     if (isNew) {
       await this.runningDb.createRunning(newTaskName);
     }
+
+    // 等待连接结果，才返回是否ready
+    await new Promise((resolve, reject) => {
+      queue.once('ready', resolve);
+      queue.once('error', reject);
+    });
   }
 
   /**
