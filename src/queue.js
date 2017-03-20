@@ -56,6 +56,9 @@ class Abul extends EventEmitter {
     // 定时加载正在运行的任务
     Abul.runningTick(this);
     setInterval(Abul.runningTick(this), 5000);
+
+    // 定时检测任务是否完成
+    setInterval(Abul.doneTick(this), 1000);
   }
 
   /**
@@ -87,6 +90,46 @@ class Abul extends EventEmitter {
       await self.initNewJobQueue(newTaskNames);
 
       debug('--------------------------- LOAD TICK FINISH---------------------------');
+    };
+  }
+
+  /**
+   * 定时检测任务是否完成
+   * @param {*} self
+   */
+  static doneTick(self) {
+    return async () => {
+      return Promise.map(_.keys(self.runningTask), async (taskName) => {
+        const queue = self.runningTask[taskName];
+        const status = await queue.getJobCounts();
+
+        debug(taskName, status);
+        // 等待任务为0，延迟任务为0，活动中的任务为0
+
+        function isLikelyDone(sts) {
+          return sts.wait === 0 && sts.delayed === 0 && sts.active === 0;
+        }
+
+        // 如果几种类型的任务都为不0，那么任务肯定没完成，不再进行详细的检测
+        if (!isLikelyDone(status)) {
+          return;
+        }
+
+        // 过xx秒后再次检查，如果仍然通过，那么发出任务完成信号，或者检测错误可能是queue连接已经被断开、销毁
+        try {
+          const newStatus = await queue.getJobCounts();
+
+          // 再次检测几种类型的任务是否为0，并且任务是否已经很久没有添加
+          if (isLikelyDone(newStatus) && self.isAddFinish(taskName)) {
+            debug('------------------- CHECK DONE -------------------');
+            self.emit('done', taskName);
+            self.runningDb.removeRunning(taskName);
+          }
+        } catch (error) {
+          debug('------------------- CHECK DONE error -------------------', error);
+          self.runningDb.removeRunning(taskName);
+        }
+      });
     };
   }
 
@@ -125,48 +168,6 @@ class Abul extends EventEmitter {
       // 开始准备处理该类型的任务
       await this.ready(newTaskName, false);
     });
-  }
-
-  /**
-   * 检查任务是否完成
-   * @param {string} taskName
-   * @param {object} status
-   * @param {object} queue
-   * @private
-   */
-  async startDoneChecker(taskName, queue) {
-    const status = await queue.getJobCounts();
-
-    debug(taskName, status);
-    // 等待任务为0，延迟任务为0，活动中的任务为0
-
-    function isLikelyDone(sts) {
-      return sts.wait === 0 && sts.delayed === 0 && sts.active === 0;
-    }
-
-    // 如果几种类型的任务都为不0，那么任务肯定没完成，不再进行详细的检测
-    if (!isLikelyDone(status)) {
-      return;
-    }
-
-    // 过xx秒后再次检查，如果仍然通过，那么发出任务完成信号，或者检测错误可能是queue连接已经被断开、销毁
-    await Promise.delay(this.addExpire * 1.5)
-      .then(async () => {
-        try {
-          const newStatus = await queue.getJobCounts();
-
-          // 再次检测几种类型的任务是否为0，并且任务是否已经很久没有添加
-          if (isLikelyDone(newStatus) && this.isAddFinish(taskName)) {
-            debug('------------------- CHECK DONE -------------------');
-            this.emit('done', taskName);
-            this.runningDb.removeRunning(taskName);
-          }
-        } catch (error) {
-          debug('------------------- CHECK DONE error -------------------', error);
-          this.emit('done', taskName);
-          this.runningDb.removeRunning(taskName);
-        }
-      });
   }
 
   /**
@@ -219,11 +220,6 @@ class Abul extends EventEmitter {
         if (eventName === 'error') {
           debug(args);
           process.exit();
-        }
-
-        // 检测任务是否全部完成
-        if ((eventName === 'completed' || eventName === 'failed')) {
-          await this.startDoneChecker(newTaskName, queue);
         }
       });
     });
