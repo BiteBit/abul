@@ -209,6 +209,10 @@ class Abul extends EventEmitter {
     if (isNew) {
       await this.redis.setRunning(newTaskName, { status: 'ready', start: Date.now() });
     }
+
+    process.nextTick(() => {
+      this.emit('ready', newTaskName);
+    });
   }
 
   /**
