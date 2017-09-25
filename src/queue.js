@@ -5,6 +5,8 @@ import { EventEmitter } from 'events';
 import Promise from 'bluebird';
 import Queue from 'bull';
 
+import RedisStore from './redis_store';
+
 const debug = Debug('abul');
 
 class Abul extends EventEmitter {
@@ -15,10 +17,6 @@ class Abul extends EventEmitter {
     assert.equal(typeof opts.handler, 'function');
     assert.equal(typeof opts.connectionString === 'string' || opts.connectionString === undefined, true);
     assert.equal(typeof opts.concurrency === 'number' || opts.concurrency === undefined, true);
-    assert.equal(typeof opts.runningDb.findRunning, 'function');
-    assert.equal(typeof opts.runningDb.createRunning, 'function');
-    assert.equal(typeof opts.runningDb.removeRunning, 'function');
-    assert.equal(typeof opts.addExpire === 'number' || opts.addExpire === undefined, true);
 
     // 需要外部配置的参数
     // 队列处理器
@@ -30,28 +28,18 @@ class Abul extends EventEmitter {
     // 队列并发数
     this.concurrency = opts.concurrency || 5;
 
-    // 记录正在运行的任务
-    // 需要实现findRunning方法，返回正在运行的任务数组，并且每个元素必须包含name [{name: 'task_1'}]
-    // 需要实现createRunning方法，持久化一个任务到正在运行的任务数组中，以便其他WORKER通过findRunning获取正在运行的任务来创建处理任务
-    // removeRunning
-    this.runningDb = opts.runningDb;
-
-    // 任务添加的过期时间
-    this.addExpire = opts.addExpire || 30 * 1000;
+    // 记录正在运行的任务数据库
+    this.runningDbName = opts.runningDbName || 'abul';
 
     ////////////////////////////////////////////////////////////////////////////////////////////////
     // 内部数据结构，不是参数
     ////////////////////////////////////////////////////////////////////////////////////////////////
-
     // 进程中记录的正在运行的任务
     // key    taskname任务名称，key必须是唯一的
     // value  任务队列实例
     this.runningTask = {};
 
-    // 记录任务最近一次add时间
-    // key    taskname任务名称，key必须是唯一的
-    // value  boolean
-    this.runningTaskLastAdd = {};
+    this.redis = new RedisStore({ redis: this.connectionString, runningDbName: this.runningDbName });
 
     // 定时加载正在运行的任务
     Abul.runningTick(this);
@@ -70,8 +58,8 @@ class Abul extends EventEmitter {
       debug('--------------------------- LOAD TICK START---------------------------');
 
       // 最新的正在运行的任务
-      const runningTaskNow = await self.runningDb.findRunning();
-      const runningTaskNowNames = _.map(runningTaskNow, (item) => { return item.name; });
+      const runningTaskNow = await self.redis.getRunnings();
+      const runningTaskNowNames = _.keys(runningTaskNow);
 
       // 当前进程中记录的正在运行的任务
       const runningOldTaskNames = _.keys(self.runningTask);
@@ -95,20 +83,23 @@ class Abul extends EventEmitter {
    * @private
    */
   async cleanOldJobQueue(finishTaskNames) {
-    debug('FINISH TASKS: ', finishTaskNames);
-    await Promise.each(finishTaskNames, async (oldTaskName) => {
-      debug('CLEAN OLD TASK:', oldTaskName);
+    debug('CLEAN_OLD_TASK', finishTaskNames);
 
+    await Promise.each(finishTaskNames, async (oldTaskName) => {
+      debug('CLEAN_OLD_TASK_START', oldTaskName);
+
+      // 清空任务
       await this.runningTask[oldTaskName].empty();
 
       // 关闭worker
-      debug('close start');
       await this.runningTask[oldTaskName].close(true);
-      debug('close finish');
+
+      // 清理任务运行数据
 
       // 删除当前进程里的任务记录
       delete this.runningTask[oldTaskName];
-      delete this.runningTaskLastAdd[oldTaskName];
+
+      debug('CLEAN_OLD_TASK_SUCCESS', oldTaskName);
     });
   }
 
@@ -117,13 +108,15 @@ class Abul extends EventEmitter {
    * @private
    */
   async initNewJobQueue(newTaskNames) {
-    debug('NEW TASKS: ', newTaskNames);
+    debug('NEW_TASKS', newTaskNames);
 
     await Promise.each(newTaskNames, async (newTaskName) => {
-      debug('PROCESS NEW TASK', newTaskName);
+      debug('NEW_TASK_START', newTaskName);
 
       // 开始准备处理该类型的任务
       await this.ready(newTaskName, false);
+
+      debug('NEW_TASK_FINISH', newTaskName);
     });
   }
 
@@ -135,48 +128,26 @@ class Abul extends EventEmitter {
    * @private
    */
   async startDoneChecker(taskName, queue) {
+    debug('startDoneChecker');
     const status = await queue.getJobCounts();
+    const taskInfo = await this.redis.getRunning(taskName);
 
-    debug(taskName, status);
-    // 等待任务为0，延迟任务为0，活动中的任务为0
-
-    function isLikelyDone(sts) {
-      return sts.wait === 0 && sts.delayed === 0 && sts.active === 0;
-    }
+    debug('StartDoneCheckerResult', taskName, status, taskInfo);
 
     // 如果几种类型的任务都为不0，那么任务肯定没完成，不再进行详细的检测
-    if (!isLikelyDone(status)) {
+    if (status.waiting !== 0 || status.delayed !== 0 || status.active !== 0) {
       return;
     }
 
-    // 过xx秒后再次检查，如果仍然通过，那么发出任务完成信号，或者检测错误可能是queue连接已经被断开、销毁
-    await Promise.delay(this.addExpire * 1.5)
-      .then(async () => {
-        try {
-          const newStatus = await queue.getJobCounts();
+    if (taskInfo.status !== 'final') {
+      return;
+    }
 
-          // 再次检测几种类型的任务是否为0，并且任务是否已经很久没有添加
-          if (isLikelyDone(newStatus) && this.isAddFinish(taskName)) {
-            debug('------------------- CHECK DONE -------------------');
-            this.emit('done', taskName);
-            this.runningDb.removeRunning(taskName);
-          }
-        } catch (error) {
-          debug('------------------- CHECK DONE error -------------------', error);
-          this.emit('done', taskName);
-          this.runningDb.removeRunning(taskName);
-        }
-      });
-  }
+    // 再次检测几种类型的任务是否为0，并且任务是否已经很久没有添加
+    this.emit('done', taskName);
 
-  /**
-   * 检测指定任务是否完成添加
-   * 如果任务最近的添加时间超过指定的期限，那么认为任务已经添加完毕
-   * @param {string} taskName
-   * @private
-   */
-  isAddFinish(taskName) {
-    return Date.now() - this.runningTaskLastAdd[taskName] > this.addExpire;
+    await this.redis.delRunning(taskName);
+    debug('TASK_IS_DONE', taskName);
   }
 
   /**
@@ -236,14 +207,17 @@ class Abul extends EventEmitter {
 
     // 保存到正在运行的任务记录中
     if (isNew) {
-      await this.runningDb.createRunning(newTaskName);
+      await this.redis.setRunning(newTaskName, { status: 'ready', start: Date.now() });
     }
+  }
 
-    // 等待连接结果，才返回是否ready
-    await new Promise((resolve, reject) => {
-      queue.once('ready', resolve);
-      queue.once('error', reject);
-    });
+  /**
+   *  结束添加任务
+   * @param {string} taskName
+   */
+  async final(taskName) {
+    const ret = await this.redis.setRunning(taskName, { status: 'final' });
+    return ret;
   }
 
   /**
@@ -259,19 +233,17 @@ class Abul extends EventEmitter {
     assert.equal(typeof task, 'object');
     assert.equal(typeof options === 'object' || options === undefined, true);
 
-    debug('READY TO ADD TASK:', name, task, options);
+    debug('READY_TO_ADD_TASK', name, task, options);
     const queue = this.runningTask[name];
 
     if (!queue) {
       throw new Error(`Job [${name}] is not running!`);
     }
 
-    // 设置任务最近添加的时间戳
-    this.runningTaskLastAdd[name] = Date.now();
-
     return queue.add(task, _.defaults(options, {
       attempts: 3,
       timeout: 60 * 1000,
+      removeOnFail: true,
       removeOnComplete: true,
       backoff: {
         type: 'fixed',

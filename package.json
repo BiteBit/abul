@@ -1,6 +1,6 @@
 {
   "name": "abul",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "main": "lib/queue.js",
   "scripts": {
     "clean": "rm -rf .nyc_output coverage lib",
@@ -31,8 +31,9 @@
   },
   "dependencies": {
     "bluebird": "^3.5.0",
-    "bull": "^2.2.4",
+    "bull": "^3.2.0",
     "debug": "^2.6.1",
+    "ioredis": "^3.1.4",
     "lodash": "^4.16.0"
   },
   "devDependencies": {
