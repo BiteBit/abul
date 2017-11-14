@@ -134,6 +134,8 @@ class Abul extends EventEmitter {
 
     debug('StartDoneCheckerResult', taskName, status, taskInfo);
 
+    if (!taskInfo) return;
+
     // 如果几种类型的任务都为不0，那么任务肯定没完成，不再进行详细的检测
     if (status.waiting !== 0 || status.delayed !== 0 || status.active !== 0) {
       return;
@@ -143,8 +145,10 @@ class Abul extends EventEmitter {
       return;
     }
 
+    const stats = await this.redis.getStats(taskName);
+
     // 再次检测几种类型的任务是否为0，并且任务是否已经很久没有添加
-    this.emit('done', taskName);
+    this.emit('done', taskName, stats);
 
     await this.redis.delRunning(taskName);
     debug('TASK_IS_DONE', taskName);
@@ -185,17 +189,25 @@ class Abul extends EventEmitter {
         args.unshift(newTaskName);
         args.unshift(eventName);
 
-        this.emit.apply(this, args);
-
         if (eventName === 'error') {
           debug(args);
           process.exit();
+        }
+
+        if (eventName === 'active') {
+          await this.redis.setStats(newTaskName, 'total');
+        } else if (eventName === 'completed') {
+          await this.redis.setStats(newTaskName, 'success');
+        } else if (eventName === 'failed') {
+          await this.redis.setStats(newTaskName, 'failed');
         }
 
         // 检测任务是否全部完成
         if ((eventName === 'completed' || eventName === 'failed')) {
           await this.startDoneChecker(newTaskName, queue);
         }
+
+        this.emit.apply(this, args);
       });
     });
 
